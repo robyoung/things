@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::{response::IntoResponse, routing::get, Json, Router};
-use things_api::{Item, List};
+use things_server::lists::RootList;
 
 #[tokio::main]
 async fn main() {
@@ -20,18 +20,10 @@ async fn main() {
 }
 
 async fn get_list() -> impl IntoResponse {
-    Json(List {
-        name: "example".to_owned(),
-        items: vec![
-            Item {
-                value: "first".to_owned(),
-            },
-            Item {
-                value: "second".to_owned(),
-            },
-            Item {
-                value: "third".to_owned(),
-            },
-        ],
-    })
+    let mut list = RootList::new("example").snapshot();
+    list.add("first");
+    list.add("second");
+    list.add("third");
+
+    Json(list)
 }

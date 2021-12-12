@@ -1,5 +1,5 @@
 use schemars::schema_for;
-use things_api::{Item, List};
+use things_server::lists::{List, ListItem};
 
 macro_rules! write_schema {
     ($model:ty, $name:expr) => {{
@@ -10,6 +10,6 @@ macro_rules! write_schema {
 }
 
 fn main() {
-    write_schema!(Item, "item");
+    write_schema!(ListItem, "item");
     write_schema!(List, "list");
 }
