@@ -1,11 +1,10 @@
-use std::{cmp, collections::HashSet};
+use std::cmp;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
 
-// TODO: maybe make it so only snapshots are serializable
 #[derive(Serialize, JsonSchema, Clone)]
 pub struct List {
     top_id: u32,
@@ -32,6 +31,17 @@ impl RootList {
             name: self.0.name.clone(),
             items: self.0.items.clone(),
             log: self.0.log.snapshot(),
+        }
+    }
+
+    pub fn commit(&mut self, changes: &[LogRecord]) -> Result<Vec<LogRecord>> {
+        if changes[0] == *self.0.log.records.last().unwrap() {
+            self.0.log.records.extend_from_slice(&changes[1..]);
+            self.0.redo_all()?;
+            Ok(changes.to_vec())
+        } else {
+            // TODO: rewrite the changes
+            Err(ListError::CannotCommit.into())
         }
     }
 }
@@ -101,9 +111,17 @@ impl List {
         Ok(())
     }
 
+    /// Apply the next operation in the log
     pub fn redo(&mut self) -> Result<()> {
         let operation = self.log.redo()?;
         self.apply(operation)?;
+        Ok(())
+    }
+
+    pub fn redo_all(&mut self) -> Result<()> {
+        while let Ok(operation) = self.log.redo() {
+            self.apply(operation)?;
+        }
         Ok(())
     }
 
@@ -193,22 +211,8 @@ impl List {
         self.items.iter()
     }
 
-    pub fn merge(&mut self, mut other: List) {
-        // TODO: fix this it is bad
-        let values = self
-            .items
-            .iter()
-            .map(|item| &item.value)
-            .collect::<HashSet<&String>>();
-        let mut to_add = vec![];
-        for (i, item) in other.iter().enumerate() {
-            if !values.contains(&item.value) {
-                to_add.push(i);
-            }
-        }
-        for i in to_add {
-            self.items.push(other.items.swap_remove(i));
-        }
+    pub fn changes(&self) -> &[LogRecord] {
+        self.log.changes()
     }
 
     fn next_id(&mut self) -> u32 {
@@ -225,6 +229,8 @@ enum ListError {
     CannotUndo,
     #[error("Cannot redo")]
     CannotRedo,
+    #[error("Cannot commit")]
+    CannotCommit,
 }
 
 #[derive(Serialize, JsonSchema, Debug, PartialEq, Clone)]
@@ -278,6 +284,7 @@ impl Log {
     }
 
     // TODO return a reference
+    /// Apply the next operation
     fn redo(&mut self) -> Result<Operation> {
         if self.head == self.records.len() - 1 {
             // cannot redo beyond the end of the log
@@ -297,10 +304,14 @@ impl Log {
                 .clone(),
         )
     }
+
+    fn changes(&self) -> &[LogRecord] {
+        &self.records[self.fork..self.head + 1]
+    }
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
-struct LogRecord {
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
+pub struct LogRecord {
     id: u32,
     stamp: DateTime<Utc>,
     operation: Operation,
@@ -321,7 +332,7 @@ impl LogRecord {
     }
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
 enum Operation {
     Root,
     Add(ListItem),
@@ -334,7 +345,7 @@ enum Operation {
     },
 }
 
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
 struct ListItemUpdate {
     value: Option<String>,
 }
@@ -529,9 +540,33 @@ mod tests {
         }
     }
 
-    mod merge {
+    mod commit {
         use super::*;
 
+        #[test]
+        fn commit_with_no_intervening_records() {
+            let mut root = RootList::new("shopping");
+            let mut list = root.snapshot();
+            list.add("potatoes");
+            root.commit(list.changes()).unwrap();
+
+            let list = root.snapshot();
+            assert_eq!(list_values(&list), vec!["potatoes"]);
+        }
+
+        #[test]
+        fn commit_adds() {
+            let mut root = RootList::new("shopping");
+            let mut list1 = root.snapshot();
+            let mut list2 = root.snapshot();
+            list1.add("potatoes");
+            list2.add("tomatoes");
+            root.commit(list1.changes()).unwrap();
+            root.commit(list2.changes()).unwrap();
+
+            let list = root.snapshot();
+            assert_eq!(list_values(&list), vec!["potatoes", "tomatoes"]);
+        }
         /*
         #[test]
         fn two_non_conflicting_adds() {
