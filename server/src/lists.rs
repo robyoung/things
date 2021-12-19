@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap};
+use std::cmp;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -101,7 +101,7 @@ impl RootList {
                     .iter()
                     .any(|change| change.conflicts_with(&to_apply))
                 {
-                    todo!();
+                    return Err(ListError::CannotCommit.into());
                 } else {
                     self.list.log.commit_record(to_apply.clone());
                     new_changes.push(to_apply);
