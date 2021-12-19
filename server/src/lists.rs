@@ -3,54 +3,9 @@ use std::cmp;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
-use serde::{
-    de::{self, Unexpected, Visitor},
-    Deserialize, Serialize,
-};
+use serde::Serialize;
 
-#[derive(Copy, Clone, PartialEq, Debug, JsonSchema)]
-pub struct Id {
-    agent: u32,
-    id: u32,
-}
-
-struct IdVisitor;
-
-impl Serialize for Id {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let id = format!("{}:{}", self.agent, self.id);
-        serializer.serialize_str(id.as_str())
-    }
-}
-
-impl<'de> Visitor<'de> for IdVisitor {
-    type Value = Id;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("expecting a colon separated pair of integers")
-    }
-
-    fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
-        if let Some(i) = s.find(":") {
-            if let (Ok(agent), Ok(id)) = (s[..i].parse::<u32>(), s[i + 1..].parse::<u32>()) {
-                return Ok(Id { agent, id });
-            }
-        }
-        Err(de::Error::invalid_value(Unexpected::Str(s), &self))
-    }
-}
-
-impl<'de> Deserialize<'de> for Id {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        deserializer.deserialize_str(IdVisitor)
-    }
-}
+use crate::id::Id;
 
 #[derive(Serialize, JsonSchema, Clone)]
 pub struct List {
@@ -76,13 +31,7 @@ impl RootList {
 
     pub fn snapshot(&mut self) -> List {
         self.top_agent += 1;
-        List {
-            agent: self.top_agent,
-            top_id: 0,
-            name: self.list.name.clone(),
-            items: self.list.items.clone(),
-            log: self.list.log.snapshot(),
-        }
+        self.list.snapshot(self.top_agent)
     }
 
     pub fn commit(&mut self, changes: &[LogRecord]) -> Result<Vec<LogRecord>> {
@@ -121,6 +70,16 @@ impl List {
             name: name.into(),
             items: vec![],
             log: Default::default(),
+        }
+    }
+
+    fn snapshot(&self, agent: u32) -> Self {
+        Self {
+            agent,
+            top_id: 0,
+            name: self.name.clone(),
+            items: self.items.clone(),
+            log: self.log.snapshot(),
         }
     }
 
@@ -296,10 +255,7 @@ impl List {
 
     fn next_id(&mut self) -> Id {
         self.top_id += 1;
-        Id {
-            agent: self.agent,
-            id: self.top_id,
-        }
+        Id::new(self.agent, self.top_id)
     }
 }
 
@@ -710,19 +666,6 @@ mod tests {
             assert_eq!(list_values(&list1), vec!["potatoes", "apples"]);
         }
         */
-    }
-
-    mod id_serde {
-        use super::*;
-
-        use serde_test::{assert_tokens, Token};
-
-        #[test]
-        fn serde_id() {
-            let id = Id { agent: 1, id: 2 };
-
-            assert_tokens(&id, &[Token::Str("1:2")]);
-        }
     }
 
     fn list_values(list: &List) -> Vec<&str> {
