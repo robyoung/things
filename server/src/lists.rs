@@ -91,26 +91,24 @@ impl RootList {
             self.list.redo_all()?;
             Ok(changes.to_vec())
         } else {
-            /*
-            let id_map: HashMap<u32, u32> = HashMap::new();
+            let mut new_changes = Vec::with_capacity(changes.len());
             for to_apply in changes[1..].iter() {
-                let mut to_apply = to_apply.clone();
+                let to_apply = to_apply.clone();
                 if self
-                    .0
+                    .list
                     .log
-                    .changes_from(change[0])
-                    .any(|&change| change.conflicts_with(to_apply))
+                    .changes_from(&changes[0])
+                    .iter()
+                    .any(|change| change.conflicts_with(&to_apply))
                 {
                     todo!();
                 } else {
-                    // TODO what about updating IDs?
-                    self.0.log.records.push(to_apply);
+                    self.list.log.commit_record(to_apply.clone());
+                    new_changes.push(to_apply);
                 }
             }
-            */
-
-            // TODO: rewrite the changes
-            Err(ListError::CannotCommit.into())
+            self.list.redo_all()?;
+            Ok(new_changes)
         }
     }
 }
@@ -349,16 +347,27 @@ impl OperationLog {
             records: vec![record],
         }
     }
+
     fn push(&mut self, operation: Operation) {
-        self.records.push(LogRecord::new(
-            self.records
-                .last()
-                .expect("log always has at least one record")
-                .id
-                + 1,
-            operation,
-        ));
+        // TODO fail if head is not at end of log
+        self.records.push(LogRecord::new(self.next_id(), operation));
         self.head += 1;
+    }
+
+    fn commit_record(&mut self, record: LogRecord) {
+        self.records.push(LogRecord {
+            id: self.next_id(),
+            stamp: record.stamp,
+            operation: record.operation,
+        })
+    }
+
+    fn next_id(&self) -> u32 {
+        self.records
+            .last()
+            .expect("log always has at least one record")
+            .id
+            + 1
     }
 
     fn undo(&mut self) -> Result<Operation> {
@@ -397,6 +406,14 @@ impl OperationLog {
     fn changes(&self) -> &[LogRecord] {
         &self.records[self.fork..self.head + 1]
     }
+
+    fn changes_from(&self, record: &LogRecord) -> &[LogRecord] {
+        if let Some(i) = self.records.iter().position(|r| r == record) {
+            &self.records[i..]
+        } else {
+            &self.records[self.records.len()..]
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
@@ -417,6 +434,17 @@ impl LogRecord {
 
     fn root() -> Self {
         Self::new(0, Operation::Root)
+    }
+
+    fn conflicts_with(&self, other: &LogRecord) -> bool {
+        match (&self.operation, &other.operation) {
+            (Operation::Add(a), Operation::Add(b)) => a.id == b.id || a.value == b.value,
+            (Operation::Root, _) => false,
+            _ => {
+                dbg!(&self.operation, &other.operation);
+                todo!();
+            }
+        }
     }
 }
 
