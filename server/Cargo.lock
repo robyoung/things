@@ -640,6 +640,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_test"
+version = "1.0.132"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b138b0ce2635ff4052c489bd0a2c9a7e10de455d6b67e4fa29b5455781121300"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_urlencoded"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -751,6 +760,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_test",
  "structopt",
  "thiserror",
  "tokio",

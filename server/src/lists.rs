@@ -1,45 +1,114 @@
-use std::cmp;
+use std::{cmp, collections::HashMap};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{
+    de::{self, Unexpected, Visitor},
+    Deserialize, Serialize,
+};
+
+#[derive(Copy, Clone, PartialEq, Debug, JsonSchema)]
+pub struct Id {
+    agent: u32,
+    id: u32,
+}
+
+struct IdVisitor;
+
+impl Serialize for Id {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let id = format!("{}:{}", self.agent, self.id);
+        serializer.serialize_str(id.as_str())
+    }
+}
+
+impl<'de> Visitor<'de> for IdVisitor {
+    type Value = Id;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("expecting a colon separated pair of integers")
+    }
+
+    fn visit_str<E: de::Error>(self, s: &str) -> Result<Self::Value, E> {
+        if let Some(i) = s.find(":") {
+            if let (Ok(agent), Ok(id)) = (s[..i].parse::<u32>(), s[i + 1..].parse::<u32>()) {
+                return Ok(Id { agent, id });
+            }
+        }
+        Err(de::Error::invalid_value(Unexpected::Str(s), &self))
+    }
+}
+
+impl<'de> Deserialize<'de> for Id {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(IdVisitor)
+    }
+}
 
 #[derive(Serialize, JsonSchema, Clone)]
 pub struct List {
+    agent: u32,
     top_id: u32,
     pub items: Vec<ListItem>,
     pub name: String,
-    log: Log,
+    log: OperationLog,
 }
 
-pub struct RootList(List);
+pub struct RootList {
+    list: List,
+    top_agent: u32,
+}
 
 impl RootList {
     pub fn new(name: impl Into<String>) -> Self {
-        RootList(List {
-            top_id: 0,
-            name: name.into(),
-            items: vec![],
-            log: Default::default(),
-        })
+        RootList {
+            top_agent: 0,
+            list: List::new(0, name),
+        }
     }
 
-    pub fn snapshot(&self) -> List {
+    pub fn snapshot(&mut self) -> List {
+        self.top_agent += 1;
         List {
-            top_id: self.0.top_id,
-            name: self.0.name.clone(),
-            items: self.0.items.clone(),
-            log: self.0.log.snapshot(),
+            agent: self.top_agent,
+            top_id: 0,
+            name: self.list.name.clone(),
+            items: self.list.items.clone(),
+            log: self.list.log.snapshot(),
         }
     }
 
     pub fn commit(&mut self, changes: &[LogRecord]) -> Result<Vec<LogRecord>> {
-        if changes[0] == *self.0.log.records.last().unwrap() {
-            self.0.log.records.extend_from_slice(&changes[1..]);
-            self.0.redo_all()?;
+        if changes[0] == *self.list.log.records.last().unwrap() {
+            self.list.log.records.extend_from_slice(&changes[1..]);
+            self.list.redo_all()?;
             Ok(changes.to_vec())
         } else {
+            /*
+            let id_map: HashMap<u32, u32> = HashMap::new();
+            for to_apply in changes[1..].iter() {
+                let mut to_apply = to_apply.clone();
+                if self
+                    .0
+                    .log
+                    .changes_from(change[0])
+                    .any(|&change| change.conflicts_with(to_apply))
+                {
+                    todo!();
+                } else {
+                    // TODO what about updating IDs?
+                    self.0.log.records.push(to_apply);
+                }
+            }
+            */
+
             // TODO: rewrite the changes
             Err(ListError::CannotCommit.into())
         }
@@ -47,6 +116,16 @@ impl RootList {
 }
 
 impl List {
+    fn new(agent: u32, name: impl Into<String>) -> List {
+        Self {
+            agent,
+            top_id: 0,
+            name: name.into(),
+            items: vec![],
+            log: Default::default(),
+        }
+    }
+
     pub fn add(&mut self, value: impl Into<String>) -> ListItem {
         let value = value.into();
         if let Some(item) = self.items.iter().find(|itm| value == itm.value) {
@@ -55,6 +134,7 @@ impl List {
             let item = ListItem {
                 id: self.next_id(),
                 value,
+                done: false,
             };
             self.log.push(Operation::add(&item));
             self.items.push(item.clone());
@@ -62,7 +142,7 @@ impl List {
         }
     }
 
-    pub fn remove(&mut self, id: u32) {
+    pub fn remove(&mut self, id: Id) {
         if let Some((i, _)) = self
             .items
             .iter()
@@ -74,7 +154,7 @@ impl List {
         }
     }
 
-    pub fn edit(&mut self, id: u32, value: impl Into<String>) -> Result<ListItem> {
+    pub fn edit(&mut self, id: Id, value: impl Into<String>) -> Result<ListItem> {
         let item = self
             .items
             .iter_mut()
@@ -92,7 +172,7 @@ impl List {
     /// Move an item to a position in the list
     ///
     /// If the position is beyond the end of the list the item is just moved to the end.
-    pub fn move_to(&mut self, id: u32, position: usize) -> Result<()> {
+    pub fn move_to(&mut self, id: Id, position: usize) -> Result<()> {
         let from_i = self
             .items
             .iter()
@@ -166,6 +246,7 @@ impl List {
         Ok(())
     }
 
+    // TODO: move this out into methods on each operation
     fn revert(&mut self, operation: Operation) -> Result<()> {
         match operation {
             Operation::Add(item) => {
@@ -215,9 +296,12 @@ impl List {
         self.log.changes()
     }
 
-    fn next_id(&mut self) -> u32 {
+    fn next_id(&mut self) -> Id {
         self.top_id += 1;
-        self.top_id
+        Id {
+            agent: self.agent,
+            id: self.top_id,
+        }
     }
 }
 
@@ -235,24 +319,29 @@ enum ListError {
 
 #[derive(Serialize, JsonSchema, Debug, PartialEq, Clone)]
 pub struct ListItem {
-    pub id: u32,
+    pub id: Id,
     pub value: String,
+    pub done: bool,
 }
 
+/// Log of `Operation`s that have been applied to a `List`
+///
+/// On a `RootList` this cannot be rewound and therefore acts as
+/// an append only log.
 #[derive(Clone, Debug, Serialize, JsonSchema)]
-struct Log {
+struct OperationLog {
     head: usize,
     fork: usize,
     records: Vec<LogRecord>,
 }
 
-impl Default for Log {
+impl Default for OperationLog {
     fn default() -> Self {
         Self::new(LogRecord::root())
     }
 }
 
-impl Log {
+impl OperationLog {
     fn new(record: LogRecord) -> Self {
         Self {
             head: 0,
@@ -315,7 +404,6 @@ pub struct LogRecord {
     id: u32,
     stamp: DateTime<Utc>,
     operation: Operation,
-    // TODO add operation
 }
 
 impl LogRecord {
@@ -339,7 +427,7 @@ enum Operation {
     Remove(usize, ListItem),
     Edit(ListItem, ListItemUpdate),
     MoveTo {
-        id: u32,
+        id: Id,
         old_loc: usize,
         new_loc: usize,
     },
@@ -368,7 +456,7 @@ impl Operation {
         )
     }
 
-    pub fn move_to(id: u32, from_loc: usize, to_loc: usize) -> Self {
+    pub fn move_to(id: Id, from_loc: usize, to_loc: usize) -> Self {
         Self::MoveTo {
             id,
             old_loc: from_loc,
@@ -594,6 +682,19 @@ mod tests {
             assert_eq!(list_values(&list1), vec!["potatoes", "apples"]);
         }
         */
+    }
+
+    mod id_serde {
+        use super::*;
+
+        use serde_test::{assert_tokens, Token};
+
+        #[test]
+        fn serde_id() {
+            let id = Id { agent: 1, id: 2 };
+
+            assert_tokens(&id, &[Token::Str("1:2")]);
+        }
     }
 
     fn list_values(list: &List) -> Vec<&str> {

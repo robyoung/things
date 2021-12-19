@@ -17,3 +17,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
 
 [features]
+
+[dev-dependencies]
+serde_test = "1.0.132"
