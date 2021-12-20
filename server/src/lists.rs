@@ -449,6 +449,11 @@ impl Operation {
 mod tests {
     use super::*;
 
+    #[ctor::ctor]
+    fn init_color_backtrace() {
+        color_backtrace::install();
+    }
+
     #[test]
     fn add_delete_add_gives_new_item() {
         let mut list = RootList::new("shopping").snapshot();

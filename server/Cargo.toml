@@ -19,4 +19,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"]
 [features]
 
 [dev-dependencies]
+color-backtrace = "0.5.1"
+ctor = "0.1.21"
 serde_test = "1.0.132"
