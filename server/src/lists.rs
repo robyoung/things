@@ -420,6 +420,7 @@ enum Operation {
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
 struct ListItemUpdate {
     value: Option<String>,
+    done: Option<bool>,
 }
 
 impl Operation {
@@ -436,6 +437,7 @@ impl Operation {
             item.clone(),
             ListItemUpdate {
                 value: Some(new_value.into()),
+                done: None,
             },
         )
     }
