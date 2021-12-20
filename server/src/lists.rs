@@ -93,21 +93,22 @@ impl List {
                 value,
                 done: false,
             };
-            self.log.push(Operation::add(&item));
-            self.items.push(item.clone());
+            self.push(Operation::add(&item)).expect("add cannot fail");
             item
         }
     }
 
-    pub fn remove(&mut self, id: Id) {
+    pub fn remove(&mut self, id: Id) -> Result<()> {
         if let Some((i, _)) = self
             .items
             .iter()
             .enumerate()
             .find(|(_, item)| id == item.id)
         {
-            let item = self.items.remove(i);
-            self.log.push(Operation::remove(i, item));
+            let item = self.items[i].clone();
+            self.push(Operation::remove(i, item))
+        } else {
+            Err(ListError::NotFound.into())
         }
     }
 
@@ -119,9 +120,7 @@ impl List {
             .ok_or(ListError::NotFound)?
             .clone();
         let operation = Operation::edit(&item, value);
-
-        self.log.push(operation.clone());
-        self.apply(operation)?;
+        self.push(operation)?;
 
         Ok(item)
     }
@@ -136,36 +135,35 @@ impl List {
             .position(|item| item.id == id)
             .ok_or(ListError::NotFound)?;
         let operation = Operation::move_to(id, from_i, cmp::min(position, self.items.len() - 1));
-        self.log.push(operation.clone());
-        self.apply(operation)?;
-
-        Ok(())
+        self.push(operation)
     }
 
     pub fn undo(&mut self) -> Result<()> {
-        let operation = self.log.undo()?;
-        self.revert(operation)?;
-        Ok(())
+        self.revert_previous()
     }
 
     /// Apply the next operation in the log
     pub fn redo(&mut self) -> Result<()> {
-        let operation = self.log.redo()?;
-        self.apply(operation)?;
-        Ok(())
+        self.apply_next()
     }
 
     pub fn redo_all(&mut self) -> Result<()> {
-        while let Ok(operation) = self.log.redo() {
-            self.apply(operation)?;
+        while self.log.has_next() {
+            self.apply_next()?;
         }
         Ok(())
     }
 
-    fn apply(&mut self, operation: Operation) -> Result<()> {
-        match operation {
+    fn push(&mut self, operation: Operation) -> Result<()> {
+        self.log.push(operation.clone());
+        self.apply_next()
+    }
+
+    /// Apply the operation at the head of the log
+    fn apply_next(&mut self) -> Result<()> {
+        match self.log.next().ok_or(ListError::NoMoreOps)? {
             Operation::Add(item) => {
-                self.items.push(item);
+                self.items.push(item.clone());
             }
             Operation::Remove(_, item) => {
                 self.items.remove(
@@ -181,8 +179,8 @@ impl List {
                     .iter_mut()
                     .find(|item| item.id == old_item.id)
                     .ok_or(ListError::NotFound)?;
-                if let Some(value) = new_values.value {
-                    item.value = value;
+                if let Some(value) = &new_values.value {
+                    item.value = value.to_string();
                 }
             }
             Operation::MoveTo {
@@ -193,19 +191,18 @@ impl List {
                 let from_i = self
                     .items
                     .iter()
-                    .position(|item| item.id == id)
+                    .position(|item| item.id == *id)
                     .ok_or(ListError::NotFound)?;
                 let item = self.items.remove(from_i);
-                self.items.insert(new_loc, item);
+                self.items.insert(*new_loc, item);
             }
             Operation::Root => unreachable!(),
         }
         Ok(())
     }
 
-    // TODO: move this out into methods on each operation
-    fn revert(&mut self, operation: Operation) -> Result<()> {
-        match operation {
+    fn revert_previous(&mut self) -> Result<()> {
+        match self.log.previous().ok_or(ListError::NoMoreOps)? {
             Operation::Add(item) => {
                 self.items.remove(
                     self.items
@@ -215,7 +212,7 @@ impl List {
                 );
             }
             Operation::Remove(loc, item) => {
-                self.items.insert(loc, item);
+                self.items.insert(*loc, item.clone());
             }
             Operation::Edit(old_item, new_values) => {
                 let mut item = self
@@ -224,7 +221,7 @@ impl List {
                     .find(|item| item.id == old_item.id)
                     .ok_or(ListError::NotFound)?;
                 if new_values.value.is_some() {
-                    item.value = old_item.value;
+                    item.value = old_item.value.clone();
                 }
             }
             Operation::MoveTo {
@@ -235,10 +232,10 @@ impl List {
                 let from_i = self
                     .items
                     .iter()
-                    .position(|item| item.id == id)
+                    .position(|item| item.id == *id)
                     .ok_or(ListError::NotFound)?;
                 let item = self.items.remove(from_i);
-                self.items.insert(old_loc, item);
+                self.items.insert(*old_loc, item);
             }
             Operation::Root => unreachable!(),
         }
@@ -263,12 +260,10 @@ impl List {
 enum ListError {
     #[error("Item not found")]
     NotFound,
-    #[error("Cannot undo")]
-    CannotUndo,
-    #[error("Cannot redo")]
-    CannotRedo,
     #[error("Cannot commit")]
     CannotCommit,
+    #[error("No more operations to apply")]
+    NoMoreOps,
 }
 
 #[derive(Serialize, JsonSchema, Debug, PartialEq, Clone)]
@@ -305,9 +300,8 @@ impl OperationLog {
     }
 
     fn push(&mut self, operation: Operation) {
-        // TODO fail if head is not at end of log
+        // TODO fail if head is not at end of log or clear all in front of head
         self.records.push(LogRecord::new(self.next_id(), operation));
-        self.head += 1;
     }
 
     fn commit_record(&mut self, record: LogRecord) {
@@ -326,28 +320,28 @@ impl OperationLog {
             + 1
     }
 
-    fn undo(&mut self) -> Result<Operation> {
+    fn previous(&mut self) -> Option<&Operation> {
         if self.head <= self.fork {
             // cannot undo beyond what has been committed
-            Err(ListError::CannotUndo.into())
+            None
         } else {
-            let operation = self.records[self.head].operation.clone();
+            let operation = &self.records[self.head].operation;
             self.head -= 1;
-            Ok(operation)
+            Some(&operation)
         }
     }
 
-    // TODO return a reference
-    /// Apply the next operation
-    fn redo(&mut self) -> Result<Operation> {
-        if self.head == self.records.len() - 1 {
-            // cannot redo beyond the end of the log
-            Err(ListError::CannotRedo.into())
-        } else {
+    fn next(&mut self) -> Option<&Operation> {
+        if self.has_next() {
             self.head += 1;
-            let operation = self.records[self.head].operation.clone();
-            Ok(operation)
+            Some(&self.records[self.head].operation)
+        } else {
+            None
         }
+    }
+
+    fn has_next(&self) -> bool {
+        self.head < self.records.len() - 1
     }
 
     fn snapshot(&self) -> Self {
@@ -459,7 +453,7 @@ mod tests {
     fn add_delete_add_gives_new_item() {
         let mut list = RootList::new("shopping").snapshot();
         let potatoes1 = list.add("potatoes");
-        list.remove(potatoes1.id);
+        list.remove(potatoes1.id).unwrap();
         let potatoes2 = list.add("potatoes");
         assert_ne!(potatoes1, potatoes2);
     }
@@ -516,7 +510,7 @@ mod tests {
             let err = list.undo().err().unwrap();
             assert!(matches!(
                 err.downcast_ref::<ListError>(),
-                Some(&ListError::CannotUndo),
+                Some(&ListError::NoMoreOps),
             ));
         }
 
@@ -540,7 +534,7 @@ mod tests {
             let err = list.redo().err().unwrap();
             assert!(matches!(
                 err.downcast_ref::<ListError>(),
-                Some(&ListError::CannotRedo)
+                Some(&ListError::NoMoreOps)
             ));
             assert_eq!(list_values(&list), vec!["potatoes", "tomatoes"]);
         }
@@ -550,7 +544,7 @@ mod tests {
             let mut list = RootList::new("shopping").snapshot();
             let potatoes = list.add("potatoes");
             list.add("tomatoes");
-            list.remove(potatoes.id);
+            list.remove(potatoes.id).unwrap();
             assert_eq!(list_values(&list), vec!["tomatoes"]);
             list.undo().unwrap();
             assert_eq!(list_values(&list), vec!["potatoes", "tomatoes"]);
@@ -561,7 +555,7 @@ mod tests {
             let mut list = RootList::new("shopping").snapshot();
             let potatoes = list.add("potatoes");
             list.add("tomatoes");
-            list.remove(potatoes.id);
+            list.remove(potatoes.id).unwrap();
             list.undo().unwrap();
             list.redo().unwrap();
             assert_eq!(list_values(&list), vec!["tomatoes"]);
