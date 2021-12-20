@@ -35,10 +35,11 @@ impl RootList {
     }
 
     pub fn commit(&mut self, changes: &[LogRecord]) -> Result<Vec<LogRecord>> {
+        // TODO: handle the same set of changes being committed again
         if changes[0] == *self.list.log.records.last().unwrap() {
             self.list.log.records.extend_from_slice(&changes[1..]);
-            self.list.redo_all()?;
-            Ok(changes.to_vec())
+            self.list.apply_all()?;
+            Ok(changes[1..].to_vec())
         } else {
             let mut new_changes = Vec::with_capacity(changes.len());
             for to_apply in changes[1..].iter() {
@@ -56,7 +57,7 @@ impl RootList {
                     new_changes.push(to_apply);
                 }
             }
-            self.list.redo_all()?;
+            self.list.apply_all()?;
             Ok(new_changes)
         }
     }
@@ -147,13 +148,6 @@ impl List {
         self.apply_next()
     }
 
-    pub fn redo_all(&mut self) -> Result<()> {
-        while self.log.has_next() {
-            self.apply_next()?;
-        }
-        Ok(())
-    }
-
     fn push(&mut self, operation: Operation) -> Result<()> {
         self.log.push(operation.clone());
         self.apply_next()
@@ -198,6 +192,28 @@ impl List {
             }
             Operation::Root => unreachable!(),
         }
+        Ok(())
+    }
+
+    fn apply_all(&mut self) -> Result<()> {
+        while self.log.has_next() {
+            self.apply_next()?;
+        }
+        Ok(())
+    }
+
+    pub fn apply_commit(&mut self, changes: &[LogRecord]) -> Result<()> {
+        while self.log.beyond_fork() {
+            // TODO: should this be unwrap?
+            self.revert_previous()?;
+        }
+        for change in changes.iter() {
+            self.log.commit_record(change.clone());
+            // TODO: should this be unwrap?
+            self.apply_next()?;
+            self.log.advance_fork()?;
+        }
+
         Ok(())
     }
 
@@ -342,6 +358,19 @@ impl OperationLog {
 
     fn has_next(&self) -> bool {
         self.head < self.records.len() - 1
+    }
+
+    fn beyond_fork(&self) -> bool {
+        self.head > self.fork
+    }
+
+    fn advance_fork(&mut self) -> Result<()> {
+        if self.fork >= self.head {
+            Err(ListError::NoMoreOps.into())
+        } else {
+            self.fork += 1;
+            Ok(())
+        }
     }
 
     fn snapshot(&self) -> Self {
@@ -621,7 +650,9 @@ mod tests {
             let mut root = RootList::new("shopping");
             let mut list = root.snapshot();
             list.add("potatoes");
-            root.commit(list.changes()).unwrap();
+            let changes_in = list.changes();
+            let changes_out = root.commit(changes_in).unwrap();
+            assert_eq!(changes_out.len(), 1);
 
             let list = root.snapshot();
             assert_eq!(list_values(&list), vec!["potatoes"]);
@@ -640,31 +671,32 @@ mod tests {
             let list = root.snapshot();
             assert_eq!(list_values(&list), vec!["potatoes", "tomatoes"]);
         }
-        /*
+
         #[test]
-        fn two_non_conflicting_adds() {
-            let mut list1 = List::new("shopping");
+        fn commit_changes_back_to_list() {
+            let mut root = RootList::new("shopping");
+            let mut list1 = root.snapshot();
             list1.add("potatoes");
-            let mut list2 = list1.clone();
-            list1.add("apples");
-            list2.add("crisps");
+            let changes_in = list1.changes().to_vec();
+            assert_eq!(changes_in.len(), 2);
+            list1
+                .apply_commit(&root.commit(&changes_in).unwrap())
+                .unwrap();
 
-            list1.merge(list2);
-
-            assert_eq!(list_values(&list1), vec!["potatoes", "apples", "crisps"]);
+            assert_eq!(list1.changes().len(), 1);
         }
 
+        /*
         #[test]
         fn two_conflicting_adds() {
-            let mut list1 = List::new("shopping");
-            list1.add("potatoes");
-            let mut list2 = list1.clone();
+            let mut root = RootList::new("shopping");
+            let mut list1 = root.snapshot();
+            let mut list2 = root.snapshot();
             list1.add("apples");
             list2.add("apples");
 
-            list1.merge(list2);
-
-            assert_eq!(list_values(&list1), vec!["potatoes", "apples"]);
+            root.commit(list1.changes()).unwrap();
+            root.commit(list2.changes()).unwrap();
         }
         */
     }
