@@ -729,6 +729,27 @@ mod tests {
 
             assert_eq!(changes1, changes2);
         }
+
+        #[test]
+        fn conflicting_add_then_edit() {
+            let mut root = RootList::new("shopping");
+            let mut list1 = root.snapshot();
+            let mut list2 = root.snapshot();
+            list1.add("apples");
+            let item = list2.add("apples");
+            list2.edit(item.id, "beans").unwrap();
+
+            let changes1 = root.commit(list1.changes()).unwrap();
+            let changes2 = root.commit(list2.changes()).unwrap();
+
+            assert_eq!(changes1.len(), 1);
+            assert_eq!(changes2.len(), 2);
+
+            assert_eq!(root.list.items[0].value, "beans");
+        }
+
+        #[test]
+        fn conflicting_add_then_edits_on_both() {}
     }
 
     fn list_values(list: &List) -> Vec<&str> {
