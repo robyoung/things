@@ -41,24 +41,31 @@ impl RootList {
             self.list.apply_all()?;
             Ok(changes[1..].to_vec())
         } else {
+            let applied_changes = self.list.log.changes_since(&changes[0]).to_vec();
             let mut new_changes = Vec::with_capacity(changes.len());
             for to_apply in changes[1..].iter() {
                 let to_apply = to_apply.clone();
-                if self
-                    .list
-                    .log
-                    .changes_from(&changes[0])
-                    .iter()
-                    .any(|change| change.conflicts_with(&to_apply))
-                {
-                    return Err(ListError::CannotCommit.into());
-                } else {
+                let mut skip_add = false;
+
+                for applied_change in &applied_changes {
+                    match to_apply.check_commit(applied_change) {
+                        CheckCommit::NoConflict => {}
+                        CheckCommit::SkipAdd => {
+                            // TODO: add to id map
+                            skip_add = true;
+                        }
+                        CheckCommit::Conflict => panic!("cannot conflict"),
+                    }
+                }
+                if !skip_add {
                     self.list.log.commit_record(to_apply.clone());
                     new_changes.push(to_apply);
                 }
             }
             self.list.apply_all()?;
-            Ok(new_changes)
+            let mut applied_changes = applied_changes;
+            applied_changes.extend(new_changes);
+            Ok(applied_changes)
         }
     }
 }
@@ -386,9 +393,9 @@ impl OperationLog {
         &self.records[self.fork..self.head + 1]
     }
 
-    fn changes_from(&self, record: &LogRecord) -> &[LogRecord] {
+    fn changes_since(&self, record: &LogRecord) -> &[LogRecord] {
         if let Some(i) = self.records.iter().position(|r| r == record) {
-            &self.records[i..]
+            &self.records[i + 1..]
         } else {
             &self.records[self.records.len()..]
         }
@@ -425,6 +432,29 @@ impl LogRecord {
             }
         }
     }
+
+    fn check_commit(&self, other: &LogRecord) -> CheckCommit {
+        match (&self.operation, &other.operation) {
+            (Operation::Add(a), Operation::Add(b)) => {
+                if a.id == b.id || a.value == b.value {
+                    CheckCommit::SkipAdd
+                } else {
+                    CheckCommit::NoConflict
+                }
+            }
+            (_, Operation::Root) => CheckCommit::NoConflict,
+            _ => {
+                dbg!(&self.operation, &other.operation);
+                CheckCommit::Conflict
+            }
+        }
+    }
+}
+
+enum CheckCommit {
+    Conflict,
+    NoConflict,
+    SkipAdd,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema, PartialEq)]
@@ -686,7 +716,6 @@ mod tests {
             assert_eq!(list1.changes().len(), 1);
         }
 
-        /*
         #[test]
         fn two_conflicting_adds() {
             let mut root = RootList::new("shopping");
@@ -695,10 +724,11 @@ mod tests {
             list1.add("apples");
             list2.add("apples");
 
-            root.commit(list1.changes()).unwrap();
-            root.commit(list2.changes()).unwrap();
+            let changes1 = root.commit(list1.changes()).unwrap();
+            let changes2 = root.commit(list2.changes()).unwrap();
+
+            assert_eq!(changes1, changes2);
         }
-        */
     }
 
     fn list_values(list: &List) -> Vec<&str> {
