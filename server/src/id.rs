@@ -5,7 +5,7 @@ use serde::{
     Deserialize, Serialize,
 };
 
-#[derive(Copy, Clone, PartialEq, Debug, JsonSchema)]
+#[derive(Copy, Clone, PartialEq, Debug, JsonSchema, Hash, Eq)]
 pub struct Id {
     agent: u32,
     id: u32,
@@ -14,6 +14,14 @@ pub struct Id {
 impl Id {
     pub fn new(agent: u32, id: u32) -> Self {
         Id { agent, id }
+    }
+
+    pub fn agent(&self) -> u32 {
+        self.agent
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
     }
 }
 
