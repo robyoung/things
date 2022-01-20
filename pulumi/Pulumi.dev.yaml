@@ -1,0 +1,4 @@
+config:
+  gcp:credentials: /home/robyoung/.config/gcloud/application_default_credentials.json
+  gcp:project: rob-young-digital
+  gcp:region: europe-west1
