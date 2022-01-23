@@ -1,4 +1,10 @@
 config:
   gcp:credentials: /home/robyoung/.config/gcloud/application_default_credentials.json
-  gcp:project: rob-young-digital
+  gcp:project: rob-young
   gcp:region: europe-west1
+  things:example:
+    secure: AAABAMkGWc9mkuGIragqhZ6YKkrAvjQz24dCOVUiNgIMTaHjEUJ5GA==
+  things:gkeep-password:
+    secure: AAABAGbmofwdLcE/LGWGTke9PyJri+v8zbWng1BWRYI4Ob+67SKneoGJMPPo7Ed7
+  things:gkeep-username:
+    secure: AAABAAUgfN4Xn7wpU5j+ERIax5YrUWvdVZdGxY23ZtgRAlgzYT1y1zMQejyCHxWrmMYh8J8JAHNK82u4pt0z1i8=
