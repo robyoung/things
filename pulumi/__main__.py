@@ -1,5 +1,6 @@
 """A Google Cloud Python Pulumi program"""
 import base64
+import hashlib
 import os
 import time
 
@@ -52,7 +53,7 @@ job = cloudscheduler.Job(
         ),
         data=base64.b64encode(b"refresh").decode("utf8"),
     ),
-    schedule="*/10 * * * *",
+    schedule="*/10 7-22 * * *",
     time_zone="Europe/London",
 )
 
@@ -66,6 +67,18 @@ storage.BucketIAMBinding(
     role="roles/storage.objectAdmin",
     members=[iam_service_account(account)],
 )
+
+
+def archive_hash(archive: pulumi.AssetArchive) -> str:
+    hasher = hashlib.sha1()
+    for asset in archive.assets.values():
+        assert isinstance(asset, pulumi.FileAsset)
+        with open(asset.path, "rb") as f:
+            hasher.update(f.read())
+
+    return hasher.hexdigest()
+
+
 # The Cloud Function source code itself needs to be zipped up into an
 # archive, which we create using the pulumi.AssetArchive primitive.
 archive = pulumi.AssetArchive(
@@ -78,7 +91,10 @@ archive = pulumi.AssetArchive(
 # Create the single Cloud Storage object, which contains all of the function's
 # source code. ("main.py" and "requirements.txt".)
 source_archive_object = storage.BucketObject(
-    "things", name="main.py-%f" % time.time(), bucket=code_bucket.name, source=archive
+    "things",
+    name=f"main.py-{archive_hash(archive)}",
+    bucket=code_bucket.name,
+    source=archive,
 )
 
 # Create the Cloud Function, deploying the source we just uploaded to Google
