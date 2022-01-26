@@ -1,3 +1,4 @@
 # Things
 
-An app for lists of things.
+Keeping track of shopping
+
