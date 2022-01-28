@@ -2,19 +2,11 @@
 import base64
 import hashlib
 import os
-import time
-
-from pulumi_gcp import (
-    cloudfunctions,
-    cloudscheduler,
-    pubsub,
-    secretmanager,
-    serviceaccount,
-    storage,
-)
-from utils import iam_service_account, secret, secret_binding
 
 import pulumi
+from pulumi_gcp import cloudfunctions, cloudscheduler, pubsub, serviceaccount, storage
+
+from utils import iam_service_account, secret, secret_binding
 
 PATH_TO_SOURCE_CODE = "./functions"
 

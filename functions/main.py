@@ -1,6 +1,7 @@
 import datetime
 import json
 import os
+from typing import Optional
 
 import gkeepapi
 from google.api_core.exceptions import NotFound
@@ -18,16 +19,33 @@ GKeepList = gkeepapi._node.List
 GKeepListItem = gkeepapi._node.ListItem
 
 
-def get_secret(client: secretmanager.SecretManagerServiceClient, name: str) -> str:
-    request = {"name": f"projects/{GCP_PROJECT}/secrets/{name}/versions/latest"}
-    return client.access_secret_version(request).payload.data.decode("utf8")  # type: ignore
+def _secret_path(name: str) -> str:
+    return f"projects/{GCP_PROJECT}/secrets/{name}"
+
+
+def get_secret(
+    client: secretmanager.SecretManagerServiceClient,
+    name: str,
+    *,
+    age_limit: Optional[datetime.timedelta] = None,
+) -> Optional[str]:
+    request = {"name": f"{_secret_path(name)}/versions/latest"}
+    try:
+        if age_limit:
+            secret = client.get_secret_version(request)
+            age = datetime.datetime.now(datetime.timezone.utc) - secret.create_time
+            if age > age_limit:
+                return None
+        return client.access_secret_version(request).payload.data.decode("utf8")  # type: ignore
+    except NotFound:
+        return None
 
 
 def add_secret_version(
     client: secretmanager.SecretManagerServiceClient, name: str, value: str
 ) -> None:
     request = {
-        "parent": f"projects/{GCP_PROJECT}/secrets/{name}",
+        "parent": _secret_path(name),
         "payload": {"data": value.encode("utf8")},
     }
     client.add_secret_version(request)  # type: ignore
@@ -40,14 +58,15 @@ GKEEP_PASSWORD = get_secret(secrets_client, GKEEP_PASSWORD_KEY)
 def login() -> gkeepapi.Keep:
     keep = gkeepapi.Keep()
 
-    try:
-        token = get_secret(secrets_client, GKEEP_TOKEN_KEY)
-        if keep.resume(GKEEP_USERNAME, token):
-            return keep
-    except NotFound:
-        pass
+    token = get_secret(
+        secrets_client, GKEEP_TOKEN_KEY, age_limit=datetime.timedelta(days=1)
+    )
+    if token and keep.resume(GKEEP_USERNAME, token):
+        print("Login resumed")
+        return keep
 
     if keep.login(GKEEP_USERNAME, GKEEP_PASSWORD):
+        print("New login")
         add_secret_version(secrets_client, GKEEP_TOKEN_KEY, keep.getMasterToken())
         return keep
 
