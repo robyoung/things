@@ -34,6 +34,7 @@ secret_binding(
 secret_binding(
     "gkeep-token-write", gkeep_token, account, "roles/secretmanager.secretVersionAdder"
 )
+secret_binding("gkeep-token-get", gkeep_token, account, "roles/secretmanager.viewer")
 
 topic = pubsub.Topic("trigger")
 

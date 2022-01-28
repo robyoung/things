@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import os
 from typing import Optional
 
@@ -8,6 +9,9 @@ from google.api_core.exceptions import NotFound
 from google.cloud import secretmanager, storage
 
 secrets_client = secretmanager.SecretManagerServiceClient()
+
+_logger = logging.getLogger()
+_logger.setLevel(logging.INFO)
 
 THINGS_BUCKET_NAME = os.environ["THINGS_BUCKET_NAME"]
 GKEEP_USERNAME_KEY = os.environ["GKEEP_USERNAME_KEY"]
@@ -61,12 +65,15 @@ def login() -> gkeepapi.Keep:
     token = get_secret(
         secrets_client, GKEEP_TOKEN_KEY, age_limit=datetime.timedelta(days=1)
     )
-    if token and keep.resume(GKEEP_USERNAME, token):
-        print("Login resumed")
-        return keep
+    try:
+        if token and keep.resume(GKEEP_USERNAME, token):
+            _logger.info("login resumed")
+            return keep
+    except gkeepapi.exception.LoginException:
+        _logger.warning("login resume failed")
 
     if keep.login(GKEEP_USERNAME, GKEEP_PASSWORD):
-        print("New login")
+        _logger.info("new login")
         add_secret_version(secrets_client, GKEEP_TOKEN_KEY, keep.getMasterToken())
         return keep
 
@@ -83,13 +90,13 @@ def upload(payload: str) -> None:
         old_items_text = None
 
     if old_items_text != payload:
-        print(f"uploading new list {payload}")
+        _logger.info(f"uploading new list {payload}")
         latest.upload_from_string(payload)
         stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()[:-13]
         history = bucket.blob(f"unchecked/history/{stamp}.json")
         history.upload_from_string(payload)
     else:
-        print("no change")
+        _logger.info("no change")
 
 
 def main() -> None:
